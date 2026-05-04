@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import io
+import platform
 import queue
+import shlex
 import subprocess
 import threading
 import tkinter as tk
@@ -151,10 +153,15 @@ class PrinterGui:
             wrap="word",
             height=18,
             state="disabled",
-            font=("Consolas", 10),
+            font=self._log_font(),
         )
         log_box.grid(row=0, column=0, sticky="nsew")
         self.log_box = log_box
+
+    def _log_font(self) -> tuple[str, int]:
+        if platform.system() == "Darwin":
+            return ("Menlo", 10)
+        return ("Consolas", 10)
 
     def _refresh_mode_fields(self) -> None:
         for frame in (self.text_frame, self.pdf_frame, self.image_frame, self.test_frame):
@@ -274,7 +281,7 @@ class PrinterGui:
         self._set_busy(True)
         self.is_running = True
         self.log_queue.put(f"\n=== {label} ===\n")
-        self.log_queue.put(f"$ {subprocess.list2cmdline(argv)}\n\n")
+        self.log_queue.put(f"$ {self._format_command(argv)}\n\n")
 
         worker = threading.Thread(
             target=self._task_worker,
@@ -282,6 +289,11 @@ class PrinterGui:
             daemon=True,
         )
         worker.start()
+
+    def _format_command(self, argv: list[str]) -> str:
+        if platform.system() == "Windows":
+            return subprocess.list2cmdline(argv)
+        return shlex.join(argv)
 
     def _task_worker(self, argv: list[str]) -> None:
         writer = _QueueWriter(self.log_queue)

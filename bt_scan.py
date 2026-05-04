@@ -81,6 +81,12 @@ async def scan_ble(scan_seconds=12):
 
 def _handle_bt_error(e):
     err = str(e).lower()
+    system = platform.system()
+    if system == "Darwin" and any(x in err for x in ("permission","access denied","unauthorized")):
+        print("\n  Bluetooth scan failed!\n")
+        print("  macOS blocked Bluetooth access.")
+        print("  Allow Bluetooth access for Terminal or your Python app in System Settings, then retry.")
+        return
     print("\n  ✗  Bluetooth scan failed!\n")
     if any(x in err for x in ("powered_off","powered off","not powered on","radio is not")):
         print("  ⚠️   BLUETOOTH IS TURNED OFF")

@@ -4,10 +4,11 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectRoot
 
 function Find-Python {
+    $localPrograms = [Environment]::GetFolderPath("LocalApplicationData")
     $candidates = @(
-        "C:\Users\ankit\AppData\Local\Programs\Python\Python312\python.exe",
-        "C:\Users\ankit\AppData\Local\Programs\Python\Python313\python.exe",
-        "C:\Users\ankit\AppData\Local\Programs\Python\Python311\python.exe"
+        (Join-Path $localPrograms "Programs\Python\Python313\python.exe"),
+        (Join-Path $localPrograms "Programs\Python\Python312\python.exe"),
+        (Join-Path $localPrograms "Programs\Python\Python311\python.exe")
     )
 
     foreach ($candidate in $candidates) {
