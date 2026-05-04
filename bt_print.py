@@ -25,7 +25,7 @@ from bt_shared import (
     ESCPOS_TEST,
     BLEAK_AVAILABLE,
     W, sep, header, section, ok, fail, info, step,
-    load_config,
+    load_config, hidden_subprocess_kwargs,
 )
 
 try:
@@ -227,6 +227,38 @@ def smart_trim_escpos(data: bytes) -> bytes:
 
 COLS = 32   # characters per line at 58mm
 
+
+def _wrap_text_line(line: str, cols: int) -> list[str]:
+    """Wrap a line to a fixed column width, splitting long tokens when needed."""
+    if cols <= 0:
+        return [line]
+    if len(line) <= cols:
+        return [line]
+
+    words = line.split()
+    if not words:
+        return [line[i:i + cols] for i in range(0, len(line), cols)] or [""]
+
+    out: list[str] = []
+    cur = ""
+    for word in words:
+        if len(word) > cols:
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.extend(word[i:i + cols] for i in range(0, len(word), cols))
+            continue
+        if not cur:
+            cur = word
+        elif len(cur) + 1 + len(word) <= cols:
+            cur += " " + word
+        else:
+            out.append(cur)
+            cur = word
+    if cur:
+        out.append(cur)
+    return out or [""]
+
 def sanitize_text_payload(text: str) -> str:
     """
     Normalize decoded spool text before wrapping/rasterization.
@@ -293,20 +325,10 @@ def decode_text_payload(data: bytes) -> str:
 
 def text_to_escpos(data: bytes) -> bytes:
     text = decode_text_payload(data)
-
-    def wrap(line):
-        if len(line) <= COLS: return line
-        words, cur, out = line.split(), "", []
-        for w in words:
-            if len(cur) + len(w) + 1 <= COLS:
-                cur = (cur + " " + w).strip()
-            else:
-                if cur: out.append(cur)
-                cur = w
-        if cur: out.append(cur)
-        return "\n".join(out)
-
-    wrapped = "\n".join(wrap(l) for l in text.splitlines())
+    wrapped = "\n".join(
+        "\n".join(_wrap_text_line(line, COLS))
+        for line in text.splitlines()
+    )
     body    = wrapped.encode("latin-1", errors="replace")
     return (
         b"\x1b\x40"                 # init
@@ -389,11 +411,12 @@ def _open_and_scale_image(source) -> "object | None":
         import io as _io
 
         if isinstance(source, (bytes, bytearray)):
-            img = Image.open(_io.BytesIO(source))
+            with Image.open(_io.BytesIO(source)) as opened:
+                img = opened.convert("L")
         else:
-            img = Image.open(source)
+            with Image.open(source) as opened:
+                img = opened.convert("L")
 
-        img   = img.convert("L")
         w, h  = img.size
         new_w = PAPER_WIDTH_DOTS
         new_h = int(h * (new_w / w))
@@ -428,6 +451,10 @@ def emf_to_escpos(data: bytes):
     if platform.system() != "Windows":
         return None
 
+    tmp_path = None
+    tmp_emf = None
+    tmp_png = None
+
     # Method A: pywin32
     try:
         import win32ui, win32api
@@ -436,6 +463,7 @@ def emf_to_escpos(data: bytes):
 
         tmp = tempfile.NamedTemporaryFile(suffix=".emf", delete=False)
         tmp.write(data); tmp.close()
+        tmp_path = tmp.name
 
         PX_W, PX_H = PAPER_WIDTH_DOTS, PAPER_WIDTH_DOTS * 3
         dc  = win32ui.CreateDC(); dc.CreateCompatibleDC(None)
@@ -444,7 +472,7 @@ def emf_to_escpos(data: bytes):
         dc.SelectObject(bmp)
         dc.FillSolidRect((0, 0, PX_W, PX_H), win32api.RGB(255, 255, 255))
         win32api.PlayEnhMetaFile(dc.GetSafeHdc(), tmp.name, (0, 0, PX_W, PX_H))
-        dc.DeleteDC(); os.unlink(tmp.name)
+        dc.DeleteDC()
 
         bmpinfo = bmp.GetInfo()
         img = Image.frombuffer("RGB",
@@ -477,18 +505,21 @@ def emf_to_escpos(data: bytes):
             f'$g.DrawImage($img,0,0,$bmp.Width,$bmp.Height);'
             f'$bmp.Save("{tmp_png}");'
             f'$g.Dispose();$img.Dispose();$bmp.Dispose()'
-        ], capture_output=True, timeout=15)
+        ], capture_output=True, timeout=15, **hidden_subprocess_kwargs())
 
         if r.returncode == 0 and os.path.exists(tmp_png):
-            img = Image.open(tmp_png).convert("L")
+            with Image.open(tmp_png) as opened:
+                img = opened.convert("L")
             img = ImageOps.autocontrast(img, cutoff=3).convert("1")
             result = pil_1bit_to_escpos(img)
-            os.unlink(tmp_emf.name); os.unlink(tmp_png)
             ok("EMF rasterized via PowerShell/.NET")
             return result
-        os.unlink(tmp_emf.name)
     except Exception as e:
         info(f"PowerShell EMF failed: {e}")
+    finally:
+        _safe_unlink(tmp_path)
+        _safe_unlink(getattr(tmp_emf, "name", None))
+        _safe_unlink(tmp_png)
 
     return None
 
@@ -515,10 +546,11 @@ def _gs_rasterize(data: bytes, ext: str):
             f"-dDEVICEWIDTHPOINTS={PAPER_WIDTH_MM * 2.835:.0f}",
             "-dFIXEDMEDIA", "-dPDFFitPage",
             f"-sOutputFile={tmp_out}", tmp_in.name
-        ], capture_output=True, timeout=30)
+        ], capture_output=True, timeout=30, **hidden_subprocess_kwargs())
 
         if r.returncode == 0 and os.path.exists(tmp_out):
-            img = Image.open(tmp_out).convert("L")
+            with Image.open(tmp_out) as opened:
+                img = opened.convert("L")
             img = ImageOps.autocontrast(img, cutoff=3).convert("1")
             result = pil_1bit_to_escpos(img)
             ok(f"Ghostscript rasterized {ext.upper()}")
@@ -527,10 +559,8 @@ def _gs_rasterize(data: bytes, ext: str):
     except Exception as e:
         info(f"Ghostscript failed: {e}")
     finally:
-        try: os.unlink(tmp_in.name)
-        except: pass
-        try: os.unlink(tmp_out)
-        except: pass
+        _safe_unlink(tmp_in.name)
+        _safe_unlink(tmp_out)
     return None
 
 
@@ -553,6 +583,16 @@ def extract_text_escpos(data: bytes) -> bytes:
         return b"\x1b\x40[No printable content]\n\n\n\x1d\x56\x41\x03"
     info(f"Extracted {len(runs)} text runs from binary job")
     return text_to_escpos(b"\n".join(runs))
+
+
+def _safe_unlink(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        if os.path.exists(path):
+            os.unlink(path)
+    except Exception:
+        pass
 
 
 
@@ -738,25 +778,9 @@ def text_to_cat_protocol(text: str) -> bytes:
     # Wrap text to fit 384px width at font size
     COLS = (PAPER_WIDTH_DOTS - LEFT_PAD * 2) // (FONT_SIZE // 2)
 
-    def _wrap(line):
-        if len(line) <= COLS:
-            return [line]
-        words, cur, out = line.split(), "", []
-        for w in words:
-            if not cur:
-                cur = w
-            elif len(cur) + 1 + len(w) <= COLS:
-                cur += " " + w
-            else:
-                out.append(cur)
-                cur = w
-        if cur:
-            out.append(cur)
-        return out or [""]
-
     lines = []
     for raw_line in text.splitlines():
-        lines.extend(_wrap(raw_line) if raw_line.strip() else [""])
+        lines.extend(_wrap_text_line(raw_line, COLS) if raw_line.strip() else [""])
     if not lines:
         lines = [""]
 
@@ -810,13 +834,14 @@ def _render_document_to_cat_via_ghostscript(data: bytes, suffix: str, label: str
             "-dFIXEDMEDIA", "-dPDFFitPage",
             "-dFitPage",
             f"-sOutputFile={tmp_png}", tmp_in.name
-        ], capture_output=True, timeout=60)
+        ], capture_output=True, timeout=60, **hidden_subprocess_kwargs())
 
         pages_out = bytearray()
         for pg in sorted(glob.glob(tmp_png.replace("%03d", "*"))):
-            img = scale_fn(_PIL.open(pg))
+            with _PIL.open(pg) as opened:
+                img = scale_fn(opened)
             pages_out += image_to_cat_protocol(img)
-            _os.unlink(pg)
+            _safe_unlink(pg)
 
         if pages_out:
             ok(f"{label} rendered via Ghostscript")
@@ -828,10 +853,7 @@ def _render_document_to_cat_via_ghostscript(data: bytes, suffix: str, label: str
     except Exception as e:
         info(f"Ghostscript {label} failed: {e}")
     finally:
-        try:
-            _os.unlink(tmp_in.name)
-        except Exception:
-            pass
+        _safe_unlink(tmp_in.name)
 
     return b""
 
@@ -862,7 +884,8 @@ def _to_cat_payload(data: bytes, fmt: str, job_num: int = 0) -> bytes:
     # ── PNG / JPEG — direct PIL open
     if fmt in ("PNG", "JPEG"):
         try:
-            img = _scale_to_cat(_PIL.open(_io.BytesIO(data)))
+            with _PIL.open(_io.BytesIO(data)) as opened:
+                img = _scale_to_cat(opened)
             return image_to_cat_protocol(img)
         except Exception as e:
             info(f"PIL image open failed: {e}")
@@ -875,16 +898,20 @@ def _to_cat_payload(data: bytes, fmt: str, job_num: int = 0) -> bytes:
             import fitz  # PyMuPDF
             doc  = fitz.open(stream=data, filetype="pdf")
             pages_out = bytearray()
-            for page in doc:
-                # render at ~203 dpi scaled to paper width
-                zoom   = PAPER_WIDTH_DOTS / page.rect.width
-                mat    = fitz.Matrix(zoom, zoom)
-                pix    = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-                img    = _PIL.frombytes("L", (pix.width, pix.height), pix.samples)
-                img    = ImageOps.autocontrast(img, cutoff=2).filter(ImageFilter.SHARPEN).convert("1")
-                pages_out += image_to_cat_protocol(img)
+            page_count = doc.page_count
+            try:
+                for page in doc:
+                    # render at ~203 dpi scaled to paper width
+                    zoom   = PAPER_WIDTH_DOTS / page.rect.width
+                    mat    = fitz.Matrix(zoom, zoom)
+                    pix    = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
+                    img    = _PIL.frombytes("L", (pix.width, pix.height), pix.samples)
+                    img    = ImageOps.autocontrast(img, cutoff=2).filter(ImageFilter.SHARPEN).convert("1")
+                    pages_out += image_to_cat_protocol(img)
+            finally:
+                doc.close()
             if pages_out:
-                ok(f"PDF rendered via PyMuPDF ({doc.page_count} page(s))")
+                ok(f"PDF rendered via PyMuPDF ({page_count} page(s))")
                 return bytes(pages_out)
         except ImportError:
             info("PyMuPDF not installed — trying Ghostscript…")
@@ -915,6 +942,8 @@ def _to_cat_payload(data: bytes, fmt: str, job_num: int = 0) -> bytes:
     # ── EMF (Windows GDI metafile from spooler) — rasterize via PowerShell .NET
     if fmt == "EMF":
         import tempfile, subprocess as _sp, os as _os
+        tmp_emf = None
+        tmp_png = None
         try:
             tmp_emf = tempfile.NamedTemporaryFile(suffix=".emf", delete=False)
             tmp_emf.write(data); tmp_emf.close()
@@ -929,16 +958,18 @@ def _to_cat_payload(data: bytes, fmt: str, job_num: int = 0) -> bytes:
                 f'$g.DrawImage($img,0,0,$bmp.Width,$bmp.Height);'
                 f'$bmp.Save("{tmp_png}");'
                 f'$g.Dispose();$img.Dispose();$bmp.Dispose()'
-            ], capture_output=True, timeout=20)
+            ], capture_output=True, timeout=20, **hidden_subprocess_kwargs())
             if r.returncode == 0 and _os.path.exists(tmp_png):
-                img = _scale_to_cat(_PIL.open(tmp_png))
+                with _PIL.open(tmp_png) as opened:
+                    img = _scale_to_cat(opened)
                 result = image_to_cat_protocol(img)
-                _os.unlink(tmp_emf.name); _os.unlink(tmp_png)
                 ok("EMF rasterized via PowerShell/.NET")
                 return result
-            _os.unlink(tmp_emf.name)
         except Exception as e:
             info(f"EMF rasterization failed: {e}")
+        finally:
+            _safe_unlink(getattr(tmp_emf, "name", None))
+            _safe_unlink(tmp_png)
 
         # EMF fallback: extract readable text and render
         import re as _re
@@ -1000,28 +1031,71 @@ async def send_direct_ble(payload: bytes, cfg: dict) -> bool:
 
     mtu = cfg.get("mtu", 128) or 128
     chunk = max(20, min(RELAY_CHUNK_SIZE, mtu - 3))
+    supports_with_response = bool(cfg.get("write_with_response"))
+    supports_without_response = cfg.get("write_without_response")
+    if supports_without_response is None:
+        supports_without_response = True
 
-    async def _send_once():
+    def _response_modes():
+        modes = []
+        if supports_without_response:
+            modes.append(False)
+        if supports_with_response:
+            modes.append(True)
+        if not modes:
+            modes.append(False)
+        elif len(modes) == 1:
+            modes.append(not modes[0])
+        return modes
+
+    async def _send_once(response_mode: bool):
         async with BleakClient(address, timeout=15) as client:
             for i in range(0, len(payload), chunk):
                 await client.write_gatt_char(
-                    write_uuid, payload[i:i+chunk], response=False)
+                    write_uuid, payload[i:i+chunk], response=response_mode)
                 if i + chunk < len(payload):
                     await asyncio.sleep(RELAY_CHUNK_DELAY)
                     if _is_cat_printer(write_uuid):
                         await asyncio.sleep(0.01)
 
     try:
-        await _send_once()
-        return True
+        last_error = None
+        for response_mode in _response_modes():
+            try:
+                await _send_once(response_mode)
+                return True
+            except Exception as mode_error:
+                last_error = mode_error
+                err = str(mode_error).lower()
+                if "not connected" in err or "unreachable" in err:
+                    raise
+                info(
+                    "BLE write failed with response="
+                    f"{response_mode}; trying alternate mode"
+                )
+        if last_error is not None:
+            raise last_error
+        return False
     except Exception as e:
         err = str(e).lower()
         if "not connected" in err or "unreachable" in err:
             info("BLE link dropped, retrying once")
             try:
                 await asyncio.sleep(0.5)
-                await _send_once()
-                return True
+                last_error = None
+                for response_mode in _response_modes():
+                    try:
+                        await _send_once(response_mode)
+                        return True
+                    except Exception as mode_error:
+                        last_error = mode_error
+                        info(
+                            "BLE retry failed with response="
+                            f"{response_mode}; trying alternate mode"
+                        )
+                if last_error is not None:
+                    raise last_error
+                return False
             except Exception as retry_error:
                 fail(f"Direct BLE failed: {retry_error}")
                 return False
@@ -1053,7 +1127,7 @@ async def send_payload(payload: bytes, label: str = "job"):
 #  REGISTER FLOW  (scan + probe + register + optional test page)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main():
+async def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description="bt_print.py — Direct Bluetooth Printer Controller",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -1074,7 +1148,7 @@ async def main():
                         help="Print an image file (requires Pillow)")
     parser.add_argument("--print-pdf",   metavar="FILE",
                         help="Print a PDF file (requires: pip install pymupdf)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     selected_actions = sum(
         bool(value)
         for value in (args.test_page, args.print_text, args.print_image, args.print_pdf)
@@ -1130,7 +1204,8 @@ async def main():
         if use_cat:
             try:
                 from PIL import Image as _PIL, ImageOps, ImageFilter
-                img = _PIL.open(args.print_image).convert("L")
+                with _PIL.open(args.print_image) as opened:
+                    img = opened.convert("L")
                 w, h = img.size
                 new_w = PAPER_WIDTH_DOTS
                 img = img.resize((new_w, int(h * new_w / w)), _PIL.LANCZOS)

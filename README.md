@@ -1,9 +1,12 @@
 # BT Thermal Printer Toolkit
 
-Direct BLE printing for 57mm thermal printers on Windows.
+Direct BLE printing for 57mm thermal printers on Windows, with both a desktop GUI and CLI tools.
 
-1. Scan and save the printer config in the project folder.
-2. Run a direct print command.
+Recommended flow:
+
+1. Open the GUI.
+2. Click `Scan` to detect and save the printer config.
+3. Print text, PDFs, images, or a test page from the same window.
 
 ## Files
 
@@ -12,29 +15,60 @@ Direct BLE printing for 57mm thermal printers on Windows.
 | `bt_shared.py` | Shared constants, printer detection, GATT probe, and helpers |
 | `bt_scan.py` | Finds nearby BLE printers and saves the best match |
 | `bt_print.py` | Direct BLE printing for text, images, PDFs, and test pages |
+| `printer_gui.py` | Tkinter desktop GUI for scan and print actions |
+| `launch.vbs` | Starts the GUI without showing a console window |
 
-Keep all three files in the same directory.
+Keep all files in the same directory.
 
 ## Requirements
 
 Required:
 
 ```bash
-pip install bleak
-```
-
-Optional:
-
-```bash
-pip install Pillow
-pip install pymupdf
+pip install bleak Pillow pymupdf
 ```
 
 Optional external tool:
-
+- Tkinter: improves GUI experience
 - Ghostscript: improves PDF/PostScript rendering fallback paths.
 
 ## Quick Start
+
+### GUI
+
+Launch the desktop app:
+
+```bash
+python printer_gui.py
+```
+
+Or on Windows, double-click:
+
+```text
+launch.vbs
+```
+
+The GUI provides:
+
+- `Scan` to detect and save the printer config
+- `Text` mode for direct text printing
+- `PDF` mode with file picker
+- `Image` mode with file picker
+- `Test Page` mode
+- A live log panel showing scanner and printer output
+
+PDF note:
+PDF content should be sized to 57mm width only for reliable output.
+
+Recommended user workflow:
+
+1. Turn the printer on and keep it nearby.
+2. Click `Scan`.
+3. Choose an action mode.
+4. Enter text or browse for a PDF/image.
+5. Click `Execute Action`.
+
+### CLI
 
 ### 1. Scan and save printer config
 
@@ -78,6 +112,8 @@ Print a PDF:
 python bt_print.py --print-pdf file.pdf
 ```
 
+Use PDFs designed for 57mm width only.
+
 ## `bt_scan.py`
 
 ```bash
@@ -110,10 +146,13 @@ python bt_print.py [option]
 - BLE ESC/POS printers are sent ESC/POS payloads directly.
 - Images are scaled to 58mm paper width.
 - PDFs are rasterized before printing.
+- PDFs should be designed at 57mm content width for best results.
 
 ## Notes
 
 - Keep the printer powered on and nearby while printing.
+- The GUI runs the same `bt_scan.py` and `bt_print.py` logic as the CLI tools.
+- `launch.vbs` uses `pythonw.exe` so the GUI opens without a terminal window.
 - If `bt_print.py` says no config was found, run `python bt_scan.py --save` first.
 - If PDF printing is poor or unavailable, install `pymupdf` and optionally Ghostscript.
 - Browser `Ctrl+P` workflows were intentionally removed from this project.

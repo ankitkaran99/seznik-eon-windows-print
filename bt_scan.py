@@ -24,7 +24,7 @@ from bt_shared import (
     BLEAK_AVAILABLE, CONFIDENCE_THRESHOLD, PRINTER_UUIDS,
     W, sep, header, section, ok, fail, info,
     confidence_bar, rssi_label, score_device, probe_printer,
-    save_config, load_config,
+    save_config, load_config, hidden_subprocess_kwargs,
 )
 
 try:
@@ -126,7 +126,8 @@ def scan_windows_classic():
     def _ps(cmd):
         return subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-            capture_output=True, text=True, timeout=15)
+            capture_output=True, text=True, timeout=15,
+            **hidden_subprocess_kwargs())
 
     try:
         r = _ps(
@@ -235,7 +236,7 @@ def print_suggestions(device, com_ports):
 #  MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main():
+async def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description="bt_scan.py — Bluetooth Printer Scanner",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -256,7 +257,7 @@ async def main():
                         help="Skip deep GATT probe")
     parser.add_argument("--save",      action="store_true",
                         help="Save detected printer config for bt_print.py")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     header("bt_scan.py — Bluetooth Printer Scanner")
     print(f"  Platform  : {platform.system()} {platform.release()}")

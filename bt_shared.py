@@ -217,6 +217,31 @@ def score_device(name, uuids, mfr_data, address):
 #  GATT PROBE  (shared by scanner and printer)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+async def _probe_escpos_write_mode(client, write_uuid, modes):
+    response_modes = []
+    if modes.get("without_response"):
+        response_modes.append(False)
+    if modes.get("with_response"):
+        response_modes.append(True)
+    if not response_modes:
+        response_modes = [False, True]
+
+    last_error = None
+    for response_mode in response_modes:
+        try:
+            await client.write_gatt_char(write_uuid, ESCPOS_INIT, response=response_mode)
+            await asyncio.sleep(0.4)
+            await client.write_gatt_char(write_uuid, ESCPOS_STATUS, response=response_mode)
+            await asyncio.sleep(0.4)
+            return response_mode
+        except Exception as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No valid write mode available for ESC/POS probe")
+
+
 async def probe_printer(device):
     import asyncio
     addr = device["address"]
@@ -226,6 +251,7 @@ async def probe_printer(device):
     probe = {
         "connected": False, "mtu": None,
         "writable_chars": [], "notify_chars": [],
+        "write_modes": {},
         "escpos_ok": False, "raw_values": {},
     }
 
@@ -247,7 +273,12 @@ async def probe_printer(device):
                     print(f"    Char   {char.uuid}  [{props}]{lbl}")
 
                     if "write" in char.properties or "write-without-response" in char.properties:
-                        probe["writable_chars"].append(str(char.uuid))
+                        char_uuid = str(char.uuid)
+                        probe["writable_chars"].append(char_uuid)
+                        probe["write_modes"][char_uuid] = {
+                            "with_response": "write" in char.properties,
+                            "without_response": "write-without-response" in char.properties,
+                        }
                         print(f"           ↑ WRITABLE")
 
                     if "notify" in char.properties or "indicate" in char.properties:
@@ -258,8 +289,10 @@ async def probe_printer(device):
                         try:
                             val = await client.read_gatt_char(char.uuid)
                             if val:
-                                try:    decoded = val.decode("utf-8", errors="replace").strip()
-                                except: decoded = val.hex()
+                                try:
+                                    decoded = val.decode("utf-8", errors="replace").strip()
+                                except Exception:
+                                    decoded = val.hex()
                                 if decoded:
                                     print(f"           Value: {decoded}")
                                     probe["raw_values"][str(char.uuid)] = decoded
@@ -286,10 +319,11 @@ async def probe_printer(device):
                 else:
                     print(f"  Probing ESC/POS on {wc} …")
                     try:
-                        await client.write_gatt_char(wc, ESCPOS_INIT, response=False)
-                        await asyncio.sleep(0.4)
-                        await client.write_gatt_char(wc, ESCPOS_STATUS, response=False)
-                        await asyncio.sleep(0.4)
+                        response_mode = await _probe_escpos_write_mode(
+                            client,
+                            wc,
+                            probe["write_modes"].get(wc, {}),
+                        )
                         probe["escpos_ok"] = True
                         device["protocol"] = "BLE_ESCPOS"
                         if "BLE_ESCPOS" not in device["protos"]:
@@ -326,11 +360,18 @@ def save_config(device, write_uuid):
     if write_lower.startswith("0000ae01") or write_lower.startswith("0000ae30"):
         protocol = "BLE_CAT"
 
+    probe = device.get("probe", {})
+    write_modes = probe.get("write_modes", {})
+    selected_modes = write_modes.get(write_uuid, {})
+
     cfg = {
         "address":    device["address"],
         "name":       device["name"],
         "write_uuid": write_uuid,
         "protocol":   protocol,
+        "mtu":        probe.get("mtu"),
+        "write_with_response": selected_modes.get("with_response", False),
+        "write_without_response": selected_modes.get("without_response", True),
         "registered": True,
     }
     with open(CONFIG_FILE, "w") as f:
@@ -351,10 +392,24 @@ def load_config():
 #  POWERSHELL HELPER
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def hidden_subprocess_kwargs():
+    if platform.system() != "Windows":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def ps(cmd):
     return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-        capture_output=True, text=True, timeout=30
+        capture_output=True, text=True, timeout=30,
+        **hidden_subprocess_kwargs(),
     )
 
 def is_admin():
