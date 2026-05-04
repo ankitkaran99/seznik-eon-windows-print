@@ -28,6 +28,8 @@ Keep all files in the same directory.
 
 For most users, start with the packaged Windows app:
 
+Download the latest build from the repository release page, then run:
+
 ```text
 dist\SeznikEONPrinterToolkit.exe
 ```
@@ -177,6 +179,7 @@ python bt_print.py [option]
 ## Notes
 
 - Keep the printer powered on and nearby while printing.
+- Most users should download the latest packaged build from the repository release page.
 - Users who do not want to install Python can run `dist\SeznikEONPrinterToolkit.exe`.
 - The GUI runs the same `bt_scan.py` and `bt_print.py` logic as the CLI tools.
 - `launch.vbs` uses `pythonw.exe` so the GUI opens without a terminal window.
