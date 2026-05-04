@@ -28,7 +28,7 @@ class _QueueWriter(io.TextIOBase):
 class PrinterGui:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Bluetooth Printer GUI")
+        self.root.title("Seznik EON Printer Toolkit")
         self.root.geometry("860x680")
         self.root.minsize(760, 620)
 

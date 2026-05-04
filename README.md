@@ -1,4 +1,4 @@
-# BT Thermal Printer Toolkit
+# Seznik EON Printer Toolkit
 
 Direct BLE printing for 57mm thermal printers on Windows, with both a desktop GUI and CLI tools.
 
@@ -17,32 +17,38 @@ Recommended flow:
 | `bt_print.py` | Direct BLE printing for text, images, PDFs, and test pages |
 | `printer_gui.py` | Tkinter desktop GUI for scan and print actions |
 | `launch.vbs` | Starts the GUI without showing a console window |
+| `build_exe.ps1` | Rebuilds `dist/SeznikEONPrinterToolkit.exe` with PyInstaller |
+| `dist/SeznikEONPrinterToolkit.exe` | Standalone Windows GUI build |
 
 Keep all files in the same directory.
 
-## Requirements
-
-Required:
-
-```bash
-pip install bleak Pillow pymupdf
-```
-
-Optional external tool:
-- Tkinter: improves GUI experience
-- Ghostscript: improves PDF/PostScript rendering fallback paths.
-
 ## Quick Start
 
-### GUI
+### First Use
 
-Launch the desktop app:
+For most users, start with the packaged Windows app:
+
+```text
+dist\SeznikEONPrinterToolkit.exe
+```
+
+First-time steps:
+
+1. Turn the printer on and keep it nearby.
+2. Open `dist\SeznikEONPrinterToolkit.exe`.
+3. Click `Scan` to detect and save the printer config.
+4. Choose `Text`, `PDF`, `Image`, or `Test Page`.
+5. Click `Start Print`.
+
+### Other Launch Options
+
+If you want to run the Python GUI source instead:
 
 ```bash
 python printer_gui.py
 ```
 
-Or on Windows, double-click:
+Or on Windows, if Python is installed:
 
 ```text
 launch.vbs
@@ -60,13 +66,33 @@ The GUI provides:
 PDF note:
 PDF content should be sized to 57mm width only for reliable output.
 
-Recommended user workflow:
+### Build EXE
 
-1. Turn the printer on and keep it nearby.
-2. Click `Scan`.
-3. Choose an action mode.
-4. Enter text or browse for a PDF/image.
-5. Click `Execute Action`.
+To rebuild the standalone Windows executable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
+```
+
+Build output:
+
+```text
+dist\SeznikEONPrinterToolkit.exe
+```
+
+## Python Requirements
+
+Only needed if you want to run the source files directly instead of using `dist\SeznikEONPrinterToolkit.exe`.
+
+Required:
+
+```bash
+pip install bleak Pillow pymupdf
+```
+
+Optional external tool:
+- Tkinter: required for the Python GUI path
+- Ghostscript: improves PDF/PostScript rendering fallback paths
 
 ### CLI
 
@@ -151,6 +177,7 @@ python bt_print.py [option]
 ## Notes
 
 - Keep the printer powered on and nearby while printing.
+- Users who do not want to install Python can run `dist\SeznikEONPrinterToolkit.exe`.
 - The GUI runs the same `bt_scan.py` and `bt_print.py` logic as the CLI tools.
 - `launch.vbs` uses `pythonw.exe` so the GUI opens without a terminal window.
 - If `bt_print.py` says no config was found, run `python bt_scan.py --save` first.

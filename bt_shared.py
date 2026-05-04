@@ -40,7 +40,7 @@ ESCPOS_TEST    = (
     b"== TEST PAGE ==\n"
     b"\x1b\x21\x00"
     b"\x1b\x61\x00"
-    b"Printer : Bluetooth Thermal Printer\n"
+    b"Printer : Seznik EON Printer Toolkit\n"
     b"Protocol: Direct BLE print\n"
     b"Config  : bt_printer_config.json\n"
     b"Status  : DIRECT OK\n"
