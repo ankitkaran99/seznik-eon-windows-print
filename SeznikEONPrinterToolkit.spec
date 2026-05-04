@@ -1,17 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import os
-import sys
-
-python_home = getattr(sys, "base_prefix", sys.prefix)
-tcl_dir = os.path.join(python_home, "tcl", "tcl8.6")
-tk_dir = os.path.join(python_home, "tcl", "tk8.6")
 
 a = Analysis(
     ['printer_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[(tcl_dir, 'tcl\\tcl8.6'), (tk_dir, 'tcl\\tk8.6')],
+    datas=[('C:\\Users\\ankit\\AppData\\Local\\Programs\\Python\\Python312\\tcl\\tcl8.6', 'tcl\\tcl8.6'), ('C:\\Users\\ankit\\AppData\\Local\\Programs\\Python\\Python312\\tcl\\tk8.6', 'tcl\\tk8.6')],
     hiddenimports=['tkinter', '_tkinter'],
     hookspath=[],
     hooksconfig={},

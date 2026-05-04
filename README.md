@@ -18,8 +18,10 @@ Recommended flow:
 | `bt_scan.py` | Finds nearby BLE printers and saves the best match |
 | `bt_print.py` | Direct BLE printing for text, images, PDFs, and test pages |
 | `printer_gui.py` | Tkinter desktop GUI for scan and print actions |
-| `launch.vbs` | Starts the GUI without showing a console window on Windows |
-| `build_exe.ps1` | Rebuilds `dist/SeznikEONPrinterToolkit.exe` with PyInstaller |
+| `launch-win.vbs` | Starts the GUI without showing a console window on Windows |
+| `launch-macos.command` | Starts the GUI from Terminal on macOS |
+| `build_windows_exe.ps1` | Rebuilds `dist/SeznikEONPrinterToolkit.exe` with PyInstaller |
+| `SeznikEONPrinterToolkit.spec` | PyInstaller spec used for the Windows executable build |
 | `dist/SeznikEONPrinterToolkit.exe` | Standalone Windows GUI build |
 
 Keep all files in the same directory.
@@ -43,7 +45,7 @@ python printer_gui.py
 Or launch the GUI without a console window:
 
 ```text
-launch.vbs
+launch-win.vbs
 ```
 
 ### macOS
@@ -59,6 +61,12 @@ Or use the CLI tools directly:
 ```bash
 python3 bt_scan.py --save
 python3 bt_print.py --test-page
+```
+
+Or use the macOS launcher:
+
+```bash
+./launch-macos.command
 ```
 
 First macOS run notes:
@@ -100,7 +108,7 @@ PDF content should be sized to 57mm width only for reliable output.
 To rebuild the standalone Windows executable:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
+powershell -ExecutionPolicy Bypass -File .\build_windows_exe.ps1
 ```
 
 Build output:
@@ -202,7 +210,7 @@ python bt_print.py [option]
 - Keep the printer powered on and nearby while printing.
 - The packaged `.exe` is Windows-only.
 - The GUI runs the same `bt_scan.py` and `bt_print.py` logic as the CLI tools.
-- `launch.vbs` uses `pythonw.exe` and is Windows-only.
+- `launch-win.vbs` uses `pythonw.exe` and is Windows-only.
 - If `bt_print.py` says no config was found, run `python bt_scan.py --save` first.
 - If PDF printing is poor or unavailable, install `pymupdf` and optionally Ghostscript.
 - Browser `Ctrl+P` workflows were intentionally removed from this project.
