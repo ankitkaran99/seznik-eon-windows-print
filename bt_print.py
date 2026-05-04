@@ -17,6 +17,7 @@ import platform
 import argparse
 import re
 import subprocess
+from functools import lru_cache
 
 from bt_shared import (
     CONFIG_FILE,
@@ -226,6 +227,21 @@ def smart_trim_escpos(data: bytes) -> bytes:
 # ── Text ──────────────────────────────────────────────────────────────────────
 
 COLS = 32   # characters per line at 58mm
+CAT_TEXT_FONT_SIZE = 24
+CAT_TEXT_LINE_PAD = 4
+CAT_TEXT_LEFT_PAD = 8
+CAT_TEXT_FONT_CANDIDATES = (
+    "/System/Library/Fonts/Supplemental/Helvetica.ttc",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/SFNS.ttf",
+    "/System/Library/Fonts/Supplemental/Trebuchet MS.ttf",
+    "/System/Library/Fonts/Supplemental/Verdana.ttf",
+    "arial.ttf",
+    "Arial.ttf",
+    "DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+)
 
 
 def _wrap_text_line(line: str, cols: int) -> list[str]:
@@ -322,6 +338,29 @@ def decode_text_payload(data: bytes) -> str:
             text = data.decode("latin-1", errors="replace")
 
     return sanitize_text_payload(text)
+
+
+@lru_cache(maxsize=1)
+def _load_cat_text_font():
+    from PIL import ImageFont
+
+    for candidate in CAT_TEXT_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, CAT_TEXT_FONT_SIZE), candidate
+        except Exception:
+            continue
+
+    try:
+        return ImageFont.load_default(size=CAT_TEXT_FONT_SIZE), "Pillow default"
+    except TypeError:
+        return ImageFont.load_default(), "Pillow default"
+
+
+def _font_bbox(font, text: str) -> tuple[int, int, int, int]:
+    if hasattr(font, "getbbox"):
+        return font.getbbox(text)
+    width, height = font.getsize(text)
+    return (0, 0, width, height)
 
 def text_to_escpos(data: bytes) -> bytes:
     text = decode_text_payload(data)
@@ -766,41 +805,40 @@ def text_to_cat_protocol(text: str) -> bytes:
     Uses Pillow to rasterize text into a 384px-wide image.
     """
     try:
-        from PIL import Image as _PIL, ImageDraw, ImageFont, ImageOps
+        from PIL import Image as _PIL, ImageDraw, ImageOps
     except ImportError:
         fail("Pillow not installed — run: pip install Pillow")
         return b""
 
-    FONT_SIZE = 24
-    LINE_PAD  = 4
-    LEFT_PAD  = 8
+    font, font_name = _load_cat_text_font()
+    sample_bbox = _font_bbox(font, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+    sample_w = max(1, sample_bbox[2] - sample_bbox[0])
+    avg_char_w = max(1, sample_w // 52)
 
-    # Wrap text to fit 384px width at font size
-    COLS = (PAPER_WIDTH_DOTS - LEFT_PAD * 2) // (FONT_SIZE // 2)
+    # Wrap text to fit the actual rasterized font width.
+    cols = max(1, (PAPER_WIDTH_DOTS - CAT_TEXT_LEFT_PAD * 2) // avg_char_w)
 
     lines = []
     for raw_line in text.splitlines():
-        lines.extend(_wrap_text_line(raw_line, COLS) if raw_line.strip() else [""])
+        lines.extend(_wrap_text_line(raw_line, cols) if raw_line.strip() else [""])
     if not lines:
         lines = [""]
 
     # Measure height needed
-    line_h = FONT_SIZE + LINE_PAD
-    img_h  = max(line_h * len(lines) + LINE_PAD * 2, 1)
+    line_bbox = _font_bbox(font, "Ag")
+    line_h = max(CAT_TEXT_FONT_SIZE, line_bbox[3] - line_bbox[1]) + CAT_TEXT_LINE_PAD
+    img_h  = max(line_h * len(lines) + CAT_TEXT_LINE_PAD * 2, 1)
 
     img  = _PIL.new("L", (PAPER_WIDTH_DOTS, img_h), 255)
     draw = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype("arial.ttf", FONT_SIZE)
-    except Exception:
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", FONT_SIZE)
-        except Exception:
-            font = ImageFont.load_default()
+    if font_name == "Pillow default":
+        info("Using Pillow default text font; install a TrueType font for larger text rendering")
+    else:
+        info(f"Using text font: {font_name}")
 
-    y = LINE_PAD
+    y = CAT_TEXT_LINE_PAD
     for line in lines:
-        draw.text((LEFT_PAD, y), line, fill=0, font=font)
+        draw.text((CAT_TEXT_LEFT_PAD, y), line, fill=0, font=font)
         y += line_h
 
     img = ImageOps.autocontrast(img.convert("L"), cutoff=2).convert("1")

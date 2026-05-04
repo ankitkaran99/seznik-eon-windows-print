@@ -77,6 +77,8 @@ First macOS run notes:
 
 ## Python Requirements
 
+Use the latest available Python 3 release when running the source files directly.
+
 Install the dependencies before running the source files directly:
 
 ```bash
@@ -87,7 +89,7 @@ Platform notes:
 
 - `tkinter` is required for the GUI.
 - `Ghostscript` is optional and improves PDF/PostScript fallback rendering.
-- On macOS, you may need to use `pip3` and `python3` depending on your Python install.
+- On macOS, you may need to install `python3`, `pip3`, `tcl-tk` and `python-tk`. Use the latest version of python3.
 
 ## GUI
 
