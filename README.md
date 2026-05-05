@@ -1,227 +1,190 @@
 # Seznik EON Printer Toolkit
 
-Direct BLE printing for 57mm thermal printers, with both a desktop GUI and CLI tools.
+Windows toolkit for printing to supported 57mm BLE thermal printers over Bluetooth, with an optional Windows printer relay.
 
-The Python source now supports both Windows and macOS. The packaged `.exe` remains Windows-only.
+## What It Does
 
-Recommended flow:
+- Scans for a compatible BLE printer and saves its config
+- Prints text, images, PDFs, and test pages directly over BLE
+- Creates a normal Windows printer queue that forwards jobs to the BLE printer through a local relay
 
-1. Open the GUI.
-2. Click `Scan` to detect and save the printer config.
-3. Print text, PDFs, images, or a test page from the same window.
+## Repository Layout
 
-## Files
+- `printer_gui.py`: GUI for scan and print operations
+- `bt_scan.py`: BLE scanner and printer config saver
+- `bt_print.py`: direct BLE printing
+- `printer_relay.py`: local TCP relay for Windows spool jobs
+- `configure_relay_printer.ps1`: full Windows relay setup and uninstall script
+- `launch.vbs`: launches the GUI without a console window
+- `drivers\`: bundled printer driver package used by relay setup
 
-| File | Purpose |
-|------|---------|
-| `bt_shared.py` | Shared constants, printer detection, GATT probe, and helpers |
-| `bt_scan.py` | Finds nearby BLE printers and saves the best match |
-| `bt_print.py` | Direct BLE printing for text, images, PDFs, and test pages |
-| `printer_gui.py` | Tkinter desktop GUI for scan and print actions |
-| `launch-win.vbs` | Starts the GUI without showing a console window on Windows |
-| `launch-macos.command` | Starts the GUI from Terminal on macOS |
-| `build_windows_exe.ps1` | Rebuilds `dist/SeznikEONPrinterToolkit.exe` with PyInstaller |
-| `SeznikEONPrinterToolkit.spec` | PyInstaller spec used for the Windows executable build |
-| `dist/SeznikEONPrinterToolkit.exe` | Standalone Windows GUI build |
+## Requirements
 
-Keep all files in the same directory.
+- Windows
+- Administrator access for relay setup
+- Internet access during setup so the toolkit can download its local Python runtime and Python packages
+- A supported BLE receipt printer powered on and available for pairing
 
 ## Quick Start
 
-### Windows
+If you want a normal Windows printer that forwards to the BLE printer, run:
 
-For most Windows users, start with the packaged app:
-
-```text
-dist\SeznikEONPrinterToolkit.exe
+```powershell
+powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1
 ```
 
-You can also run the Python GUI source:
+That script handles the full setup:
 
-```bash
+1. Downloads a local Python runtime into the toolkit directory if it is missing
+2. Installs required Python packages into that local runtime
+3. Prompts for BLE printer scan and saves printer config
+4. Installs or reuses the printer driver
+5. Creates or rebinds the Windows printer queue
+6. Registers the relay at logon
+7. Creates Desktop and Start Menu shortcuts for the GUI launcher
+
+## GUI Usage
+
+Launch the GUI:
+
+```text
+launch.vbs
+```
+
+Or run it directly with Python if needed:
+
+```powershell
 python printer_gui.py
 ```
 
-Or launch the GUI without a console window:
+Typical GUI flow:
 
-```text
-launch-win.vbs
-```
+1. Power on the printer and put it into advertising mode
+2. Click `Scan`
+3. Save the detected printer config
+4. Print text, an image, a PDF, or a test page
 
-### macOS
+## CLI Usage
 
-Run the Python GUI source:
-
-```bash
-python3 printer_gui.py
-```
-
-Or use the CLI tools directly:
-
-```bash
-python3 bt_scan.py --save
-python3 bt_print.py --test-page
-```
-
-Or use the macOS launcher:
-
-```bash
-./launch-macos.command
-```
-
-First macOS run notes:
-
-- Turn Bluetooth on in `System Settings > Bluetooth`.
-- If macOS prompts for Bluetooth access, allow it for Terminal or the app you use to run Python.
-- BLE scanning inside a VM usually does not work reliably on macOS.
-
-## Python Requirements
-
-Use the latest available Python 3 release when running the source files directly.
-
-Install the dependencies before running the source files directly:
-
-```bash
-pip install bleak Pillow pymupdf
-```
-
-Platform notes:
-
-- `tkinter` is required for the GUI.
-- `Ghostscript` is optional and improves PDF/PostScript fallback rendering.
-- On macOS, you may need to install `python3`, `pip3`, `tcl-tk` and `python-tk`. Use the latest version of python3.
-
-## GUI
-
-The GUI provides:
-
-- `Scan` to detect and save the printer config
-- `Text` mode for direct text printing
-- `PDF` mode with file picker
-- `Image` mode with file picker
-- `Test Page` mode
-- A live log panel showing scanner and printer output
-
-PDF note:
-PDF content should be sized to 57mm width only for reliable output.
-
-## Windows Build
-
-To rebuild the standalone Windows executable:
+Scan and save printer config:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build_windows_exe.ps1
-```
-
-Build output:
-
-```text
-dist\SeznikEONPrinterToolkit.exe
-```
-
-There is no macOS app bundle in this repository yet. On macOS, run the Python source directly.
-
-## CLI
-
-### 1. Scan and save printer config
-
-Turn the printer on and make sure it is advertising, then run:
-
-```bash
 python bt_scan.py --save
 ```
 
-On macOS:
-
-```bash
-python3 bt_scan.py --save
-```
-
-This writes the detected printer config to:
-
-```text
-bt_printer_config.json
-```
-
-The config file is stored in the same directory as the scripts.
-
-### 2. Print directly
-
 Print a test page:
 
-```bash
+```powershell
 python bt_print.py --test-page
 ```
 
 Print text:
 
-```bash
+```powershell
 python bt_print.py --print-text "Hello"
 ```
 
 Print an image:
 
-```bash
+```powershell
 python bt_print.py --print-image photo.jpg
 ```
 
 Print a PDF:
 
-```bash
+```powershell
 python bt_print.py --print-pdf file.pdf
 ```
 
-Use PDFs designed for 57mm width only.
+Use PDFs designed for 57mm paper width.
 
-## bt_scan.py
+## Relay Setup
 
-```bash
-python bt_scan.py [options]
+Use the relay when you want applications to print through a normal Windows printer queue.
+
+Run setup as Administrator:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--scan-time N` | `12` | BLE scan duration in seconds |
-| `--all` | off | Show all BLE devices, not just printer candidates |
-| `--no-probe` | off | Skip GATT probe |
-| `--save` | off | Save the detected printer to `bt_printer_config.json` |
+Default relay target:
 
-## bt_print.py
-
-```bash
-python bt_print.py [option]
+```text
+127.0.0.1:9100
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--test-page` | Print a built-in test page |
-| `--print-text TEXT` | Print plain text directly over BLE |
-| `--print-image FILE` | Print an image file |
-| `--print-pdf FILE` | Print a PDF file |
+Setup creates:
 
-## Supported Paths
+- A saved BLE printer config
+- A local TCP/IP printer port
+- A Windows printer queue bound to that port
+- A logon startup launcher for `printer_relay.py`
+- Desktop and Start Menu shortcuts to `launch.vbs`
+- Local runtime environment variables used by the launchers
 
-- Cat/iPrint printers using `AE01` are sent through the native bitmap protocol.
-- BLE ESC/POS printers are sent ESC/POS payloads directly.
-- Images are scaled to 58mm paper width.
-- PDFs are rasterized before printing.
-- PDFs should be designed at 57mm content width for best results.
+### Common Options
+
+If the driver package installs only driver files and not the printer queue, supply the exact Windows driver name:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1 `
+  -DriverName "POS-58 Series"
+```
+
+If you want to override the local runtime or relay script path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1 `
+  -PythonExecutablePath "python\tools\python.exe" `
+  -RelayScriptPath "printer_relay.py"
+```
+
+If you want to use a custom relay port:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1 `
+  -RelayPort 9200
+```
+
+## Relay Uninstall
+
+Remove the relay setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1 -Uninstall
+```
+
+Uninstall removes:
+
+- The relay startup launcher from the current user's Startup folder
+- The Desktop and Start Menu GUI shortcuts
+- The relay printer queue if it is bound to the relay port
+- The relay TCP/IP port if no queue still uses it
+- The user environment variables created for the toolkit launchers
+
+Uninstall does not remove:
+
+- The bundled toolkit files
+- The downloaded local Python runtime in the toolkit directory
+- The installed Windows printer driver package
+
+## Manual Relay Start
+
+Run the relay directly:
+
+```powershell
+python printer_relay.py
+```
+
+Or with a custom port:
+
+```powershell
+python printer_relay.py --port 9200
+```
 
 ## Notes
 
-- Keep the printer powered on and nearby while printing.
-- The packaged `.exe` is Windows-only.
-- The GUI runs the same `bt_scan.py` and `bt_print.py` logic as the CLI tools.
-- `launch-win.vbs` uses `pythonw.exe` and is Windows-only.
-- If `bt_print.py` says no config was found, run `python bt_scan.py --save` first.
-- If PDF printing is poor or unavailable, install `pymupdf` and optionally Ghostscript.
-- Browser `Ctrl+P` workflows were intentionally removed from this project.
-
-## Example Workflow
-
-```bash
-python bt_scan.py --save
-python bt_print.py --print-text "Receipt line 1"
-python bt_print.py --print-image logo.png
-python bt_print.py --print-pdf invoice.pdf
-```
+- The toolkit stores printer config in the user profile so source runs and relay runs share the same saved printer
+- `launch.vbs` and the relay startup launcher depend on environment variables written by the setup script
+- If you move the toolkit directory after setup, rerun `configure_relay_printer.ps1` so launchers and shortcuts are refreshed

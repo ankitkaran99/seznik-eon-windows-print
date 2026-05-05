@@ -3,7 +3,6 @@ import contextlib
 import io
 import platform
 import queue
-import shlex
 import subprocess
 import threading
 import tkinter as tk
@@ -159,8 +158,6 @@ class PrinterGui:
         self.log_box = log_box
 
     def _log_font(self) -> tuple[str, int]:
-        if platform.system() == "Darwin":
-            return ("Menlo", 10)
         return ("Consolas", 10)
 
     def _refresh_mode_fields(self) -> None:
@@ -291,19 +288,17 @@ class PrinterGui:
         worker.start()
 
     def _format_command(self, argv: list[str]) -> str:
-        if platform.system() == "Windows":
-            return subprocess.list2cmdline(argv)
-        return shlex.join(argv)
+        return subprocess.list2cmdline(argv)
 
     def _task_worker(self, argv: list[str]) -> None:
         writer = _QueueWriter(self.log_queue)
         try:
             with contextlib.redirect_stdout(writer), contextlib.redirect_stderr(writer):
                 if argv[0] == "bt_scan.py":
-                    asyncio.run(bt_scan.main(argv[1:]))
+                    code = asyncio.run(bt_scan.main(argv[1:]))
                 else:
-                    asyncio.run(bt_print.main(argv[1:]))
-            self.log_queue.put("\n[exit code: 0]\n")
+                    code = asyncio.run(bt_print.main(argv[1:]))
+            self.log_queue.put(f"\n[exit code: {0 if code is None else code}]\n")
         except SystemExit as exc:
             code = exc.code if isinstance(exc.code, int) else 1
             self.log_queue.put(f"\n[exit code: {code}]\n")
@@ -314,6 +309,8 @@ class PrinterGui:
 
 
 def main() -> None:
+    if platform.system() != "Windows":
+        raise SystemExit("Seznik EON Printer Toolkit supports Windows only.")
     root = tk.Tk()
     gui = PrinterGui(root)
     root.mainloop()

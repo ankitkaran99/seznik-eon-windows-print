@@ -5,8 +5,27 @@ Used by both bt_scan.py and bt_print.py
 
 import os
 import sys
+import asyncio
 import platform
 import subprocess
+import shutil
+
+
+def _try_enable_utf8_console() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if not stream or not hasattr(stream, "reconfigure"):
+            continue
+        encoding = getattr(stream, "encoding", None) or ""
+        if encoding.lower() == "utf-8":
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_try_enable_utf8_console()
 
 try:
     from bleak import BleakScanner, BleakClient
@@ -22,13 +41,27 @@ except ImportError:
 RELAY_PORT        = 9100
 RELAY_HOST        = "127.0.0.1"
 PRINTER_NAME      = "BT-Thermal-Printer"
-CONFIG_FILE       = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bt_printer_config.json")
 RELAY_CHUNK_SIZE  = 60        # Cat/P1-series printers prefer small BLE packets
 RELAY_CHUNK_DELAY = 0.01      # 10ms between BLE packets
 CONFIDENCE_THRESHOLD = 30
 PAPER_WIDTH_DOTS  = 384       # 58mm @ 203dpi
 PAPER_WIDTH_MM    = 58
 PAPER_WIDTH_BYTES = 48        # 384 dots / 8 bits = 48 bytes per row (cat protocol)
+
+
+def _config_dir():
+    override = os.environ.get("SEZNIK_EON_CONFIG_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    return os.path.join(os.path.expanduser("~"), ".seznik-eon-printer-toolkit")
+
+
+def _legacy_config_file():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "bt_printer_config.json")
+
+
+CONFIG_DIR        = _config_dir()
+CONFIG_FILE       = os.path.join(CONFIG_DIR, "bt_printer_config.json")
 
 # ESC/POS command constants
 ESCPOS_INIT    = bytes([0x1b, 0x40])
@@ -126,28 +159,50 @@ OUI_DB = {
 
 W = 64
 
-def sep(c="─"):   print(c * W)
-def header(t):    sep("═"); print(f"  {t}"); sep("═")
+def _supports_output(text: str) -> bool:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+        return True
+    except UnicodeEncodeError:
+        return False
+
+USE_UNICODE_UI = _supports_output("═✓•█▓→")
+H_LINE = "─" if USE_UNICODE_UI else "-"
+H_HEAVY = "═" if USE_UNICODE_UI else "="
+OK_MARK = "✓" if USE_UNICODE_UI else "+"
+FAIL_MARK = "✗" if USE_UNICODE_UI else "x"
+INFO_MARK = "•" if USE_UNICODE_UI else "-"
+BAR_FILLED = "█" if USE_UNICODE_UI else "#"
+BAR_EMPTY = "░" if USE_UNICODE_UI else "."
+SIGNAL_5 = "▓▓▓▓▓" if USE_UNICODE_UI else "#####"
+SIGNAL_4 = "▓▓▓▓░" if USE_UNICODE_UI else "####."
+SIGNAL_3 = "▓▓▓░░" if USE_UNICODE_UI else "###.."
+SIGNAL_2 = "▓▓░░░" if USE_UNICODE_UI else "##..."
+SIGNAL_1 = "▓░░░░" if USE_UNICODE_UI else "#...."
+
+def sep(c=H_LINE): print(c * W)
+def header(t):    sep(H_HEAVY); print(f"  {t}"); sep(H_HEAVY)
 def section(t):   print(); sep(); print(f"  {t}"); sep()
-def ok(msg):      print(f"  ✓  {msg}")
-def fail(msg):    print(f"  ✗  {msg}")
-def info(msg):    print(f"  •  {msg}")
+def ok(msg):      print(f"  {OK_MARK}  {msg}")
+def fail(msg):    print(f"  {FAIL_MARK}  {msg}")
+def info(msg):    print(f"  {INFO_MARK}  {msg}")
 def step(n, msg): print(f"\n  [{n}] {msg}")
 
 def confidence_bar(score):
     filled = min(int(score / 5), 20)
-    bar    = "█" * filled + "░" * (20 - filled)
+    bar    = BAR_FILLED * filled + BAR_EMPTY * (20 - filled)
     level  = ("VERY HIGH" if score >= 80 else "HIGH"   if score >= 60
               else "MEDIUM"   if score >= 40 else "LOW")
     return f"[{bar}] {score}%  {level}"
 
 def rssi_label(rssi):
     if rssi is None: return "N/A"
-    if rssi >= -60:  q = "▓▓▓▓▓ Excellent"
-    elif rssi >= -70: q = "▓▓▓▓░ Good"
-    elif rssi >= -80: q = "▓▓▓░░ Fair"
-    elif rssi >= -90: q = "▓▓░░░ Weak"
-    else:             q = "▓░░░░ Very Weak"
+    if rssi >= -60:  q = f"{SIGNAL_5} Excellent"
+    elif rssi >= -70: q = f"{SIGNAL_4} Good"
+    elif rssi >= -80: q = f"{SIGNAL_3} Fair"
+    elif rssi >= -90: q = f"{SIGNAL_2} Weak"
+    else:             q = f"{SIGNAL_1} Very Weak"
     return f"{rssi} dBm  {q}"
 
 
@@ -243,7 +298,6 @@ async def _probe_escpos_write_mode(client, write_uuid, modes):
 
 
 async def probe_printer(device):
-    import asyncio
     addr = device["address"]
     name = device["name"]
     section(f"GATT Probe: {name}  [{addr}]")
@@ -374,11 +428,24 @@ def save_config(device, write_uuid):
         "write_without_response": selected_modes.get("without_response", True),
         "registered": True,
     }
+    os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
     ok(f"Config saved → {CONFIG_FILE}")
 
+def _migrate_legacy_config():
+    legacy_file = _legacy_config_file()
+    if legacy_file == CONFIG_FILE:
+        return
+    if os.path.exists(CONFIG_FILE) or not os.path.exists(legacy_file):
+        return
+
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    shutil.copy2(legacy_file, CONFIG_FILE)
+    info(f"Migrated printer config to {CONFIG_FILE}")
+
 def load_config():
+    _migrate_legacy_config()
     if not os.path.exists(CONFIG_FILE):
         return None
     try:

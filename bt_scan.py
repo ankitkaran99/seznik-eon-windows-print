@@ -81,12 +81,6 @@ async def scan_ble(scan_seconds=12):
 
 def _handle_bt_error(e):
     err = str(e).lower()
-    system = platform.system()
-    if system == "Darwin" and any(x in err for x in ("permission","access denied","unauthorized")):
-        print("\n  Bluetooth scan failed!\n")
-        print("  macOS blocked Bluetooth access.")
-        print("  Allow Bluetooth access for Terminal or your Python app in System Settings, then retry.")
-        return
     print("\n  ✗  Bluetooth scan failed!\n")
     if any(x in err for x in ("powered_off","powered off","not powered on","radio is not")):
         print("  ⚠️   BLUETOOTH IS TURNED OFF")
@@ -242,7 +236,7 @@ def print_suggestions(device, com_ports):
 #  MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main(argv: list[str] | None = None):
+async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="bt_scan.py — Bluetooth Printer Scanner",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -271,9 +265,16 @@ async def main(argv: list[str] | None = None):
     print(f"  Scan time : {args.scan_time}s")
     print(f"  GATT probe: {'disabled' if args.no_probe else 'enabled'}")
 
+    if platform.system() != "Windows":
+        fail("This toolkit supports Windows only.")
+        return 1
+    if args.scan_time <= 0:
+        fail("Scan time must be greater than 0.")
+        return 1
+
     if not BLEAK_AVAILABLE:
         fail("'bleak' not installed. Run:  pip install bleak")
-        sys.exit(1)
+        return 1
 
     # BLE scan
     all_devices = await scan_ble(args.scan_time)
@@ -329,5 +330,7 @@ async def main(argv: list[str] | None = None):
     print("  Scan complete.  Next step:  python bt_print.py --help")
     sep("═")
 
+    return 0
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

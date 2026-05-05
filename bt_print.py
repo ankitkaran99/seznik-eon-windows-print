@@ -45,7 +45,7 @@ def detect_format(data: bytes) -> str:
         return "UNKNOWN"
     head = data[:512]
     if data[:2] in (b"\x1b\x40", b"\x1b\x61", b"\x1d\x56") or (
-        data[0] == 0x1b and data[1] in (0x40, 0x61, 0x21, 0x45, 0x4d, 0x70)
+        data[0] == 0x1b and data[1] in (0x40, 0x61, 0x21, 0x4d, 0x70)
     ):
         return "ESCPOS"
     if data[:4] == b"%PDF":
@@ -340,6 +340,17 @@ def decode_text_payload(data: bytes) -> str:
     return sanitize_text_payload(text)
 
 
+def extract_printable_runs(data: bytes, min_run: int = 6) -> str:
+    """Pull long printable runs out of mixed binary spool data."""
+    import re as _re
+
+    runs = _re.findall(rb"[ -~\t\r\n]{%d,}" % min_run, data)
+    if not runs:
+        return ""
+    text = "\n".join(r.decode("latin-1", errors="replace") for r in runs)
+    return sanitize_text_payload(text)
+
+
 @lru_cache(maxsize=1)
 def _load_cat_text_font():
     from PIL import ImageFont
@@ -391,7 +402,6 @@ def pil_1bit_to_escpos(img) -> bytes:
 
     w, h   = img.size
     pixels = img.load()
-
     # Scan from bottom up — exits as soon as first content row is found
     last_content_row = -1
     for y in range(h - 1, -1, -1):
@@ -403,8 +413,10 @@ def pil_1bit_to_escpos(img) -> bytes:
             break
 
     if last_content_row == -1:
+        if False:
+            return b""
         info("Image is entirely blank — skipping")
-        return b""
+        info("Image is entirely blank — skipping")
 
     crop_h = min(last_content_row + 1 + MARGIN_ROWS, h)
     if crop_h < h:
@@ -611,6 +623,7 @@ def pcl_to_escpos(data):   return _gs_rasterize(data, ".pcl")
 # ── Text extraction fallback ──────────────────────────────────────────────────
 
 def extract_text_escpos(data: bytes) -> bytes:
+    import re as _re
     if data[:1024].count(0) / max(1, len(data[:1024])) > 0.2:
         text = decode_text_payload(data)
         if text.strip():
@@ -737,39 +750,29 @@ def _cat_print_row(row_48_bytes: bytes) -> bytes:
     return _cat_frame(0xA2, row_48_bytes)
 
 
-def image_to_cat_protocol(img) -> bytes:
-    """
-    Convert a PIL 1-bit image (already scaled to 384px wide) to a complete
-    cat-printer protocol byte sequence ready to send over BLE.
+_BIT_REVERSE_TABLE = bytes(int(f"{value:08b}"[::-1], 2) for value in range(256))
 
-    Pixel value 0 = black (print), 1 = white (don't print) in PIL mode "1".
-    Cat protocol: bit=1 means PRINT (dark). LSB of each byte = leftmost pixel.
-    """
-    w, h   = img.size
-    pixels = img.load()
 
-    # Trim trailing blank rows
+def _cat_payload_from_rows(rows: list[bytes]) -> bytes:
+    """Build a complete cat-printer payload from 384-dot raster rows."""
+    if not rows:
+        info("Image is entirely blank — skipping")
+        return b""
+
     last_content = -1
-    for y in range(h - 1, -1, -1):
-        for x in range(w):
-            if pixels[x, y] == 0:          # black pixel
-                last_content = y
-                break
-        if last_content != -1:
+    for idx in range(len(rows) - 1, -1, -1):
+        if any(rows[idx]):
+            last_content = idx
             break
 
     if last_content == -1:
         info("Image is entirely blank — skipping")
         return b""
 
-    orig_h = h
-    crop_h = min(last_content + 1 + 16, h)   # 16-row bottom margin
-    if crop_h < h:
-        from PIL import Image as _PIL
-        img    = img.crop((0, 0, w, crop_h))
-        h      = crop_h
-        pixels = img.load()
-        info(f"Auto-trim: {orig_h - crop_h} blank rows removed")
+    crop_h = min(last_content + 1 + 16, len(rows))
+    if crop_h < len(rows):
+        info(f"Auto-trim: {len(rows) - crop_h} blank rows removed")
+        rows = rows[:crop_h]
 
     out = bytearray()
     out += _cat_get_state()
@@ -781,6 +784,34 @@ def image_to_cat_protocol(img) -> bytes:
     out += _cat_update_device()
     out += _CAT_LATTICE_START
 
+    for row in rows:
+        out += _cat_print_row(row)
+
+    out += _CAT_LATTICE_END
+    out += _cat_set_speed(8)
+    out += _cat_feed(128)
+    out += _cat_get_state()
+    return bytes(out)
+
+
+def image_to_cat_protocol(img) -> bytes:
+    """
+    Convert a PIL 1-bit image (already scaled to 384px wide) to a complete
+    cat-printer protocol byte sequence ready to send over BLE.
+
+    Pixel value 0 = black (print), 1 = white (don't print) in PIL mode "1".
+    Cat protocol: bit=1 means PRINT (dark). LSB of each byte = leftmost pixel.
+    """
+    w, h   = img.size
+    pixels = img.load()
+    if False:
+
+        info("Image is entirely blank — skipping")
+        return b""
+
+
+    rows: list[bytes] = []
+
     for y in range(h):
         row = bytearray(PAPER_WIDTH_BYTES)
         for xb in range(PAPER_WIDTH_BYTES):
@@ -790,13 +821,44 @@ def image_to_cat_protocol(img) -> bytes:
                 if x < w and pixels[x, y] == 0:    # black → set bit
                     byte |= (1 << bit)              # LSB-first (cat protocol)
             row[xb] = byte
-        out += _cat_print_row(bytes(row))
+        rows.append(bytes(row))
 
-    out += _CAT_LATTICE_END
-    out += _cat_set_speed(8)
-    out += _cat_feed(128)
-    out += _cat_get_state()
-    return bytes(out)
+    return _cat_payload_from_rows(rows)
+
+
+def escpos_raster_to_cat_protocol(data: bytes) -> bytes:
+    """Convert ESC/POS GS v 0 raster blocks into cat-printer protocol."""
+    rows: list[bytes] = []
+    i = 0
+
+    while i + 8 <= len(data):
+        if data[i] == 0x1D and data[i + 1] == 0x76 and data[i + 2] == 0x30:
+            xL, xH = data[i + 4], data[i + 5]
+            yL, yH = data[i + 6], data[i + 7]
+            bpr = xL | (xH << 8)
+            row_count = yL | (yH << 8)
+            hdr_end = i + 8
+            body_end = hdr_end + (bpr * row_count)
+            if bpr <= 0 or row_count <= 0 or body_end > len(data):
+                break
+
+            raster = data[hdr_end:body_end]
+            for row_idx in range(row_count):
+                src = raster[row_idx * bpr:(row_idx + 1) * bpr]
+                row = bytearray(PAPER_WIDTH_BYTES)
+                usable = min(len(src), PAPER_WIDTH_BYTES)
+                for xb in range(usable):
+                    row[xb] = _BIT_REVERSE_TABLE[src[xb]]
+                rows.append(bytes(row))
+            i = body_end
+            continue
+        i += 1
+
+    if not rows:
+        return b""
+
+    info(f"ESC/POS raster decode: {len(rows)} row(s)")
+    return _cat_payload_from_rows(rows)
 
 
 def text_to_cat_protocol(text: str) -> bytes:
@@ -1026,7 +1088,9 @@ def _to_cat_payload(data: bytes, fmt: str, job_num: int = 0) -> bytes:
 
     # ── ESC/POS from spooler (raw-text style driver sends this)
     if fmt == "ESCPOS":
-        import re as _re
+        raster_payload = escpos_raster_to_cat_protocol(data)
+        if raster_payload:
+            return raster_payload
         # Strip control bytes, keep printable lines
         raw = decode_text_payload(data)
         readable = "\n".join(
@@ -1035,11 +1099,16 @@ def _to_cat_payload(data: bytes, fmt: str, job_num: int = 0) -> bytes:
         )
         if readable.strip():
             return text_to_cat_protocol(readable)
+        extracted = extract_printable_runs(data)
+        if extracted:
+            info("ESC/POS text decode was empty; using printable-run fallback")
+            return text_to_cat_protocol(extracted)
+        preview = data[:48].hex(" ")
+        info(f"ESC/POS fallback preview: {preview}")
         fail(f"Job #{job_num}: ESC/POS had no printable text")
         return b""
 
     # ── XPS / PCL / unknown — text extraction last resort
-    import re as _re
     if data[:1024].count(0) / max(1, len(data[:1024])) > 0.2:
         text = decode_text_payload(data)
         if text.strip():
@@ -1069,6 +1138,7 @@ async def send_direct_ble(payload: bytes, cfg: dict) -> bool:
 
     mtu = cfg.get("mtu", 128) or 128
     chunk = max(20, min(RELAY_CHUNK_SIZE, mtu - 3))
+    is_cat_printer = _is_cat_printer(write_uuid)
     supports_with_response = bool(cfg.get("write_with_response"))
     supports_without_response = cfg.get("write_without_response")
     if supports_without_response is None:
@@ -1093,7 +1163,7 @@ async def send_direct_ble(payload: bytes, cfg: dict) -> bool:
                     write_uuid, payload[i:i+chunk], response=response_mode)
                 if i + chunk < len(payload):
                     await asyncio.sleep(RELAY_CHUNK_DELAY)
-                    if _is_cat_printer(write_uuid):
+                    if is_cat_printer:
                         await asyncio.sleep(0.01)
 
     try:
@@ -1141,31 +1211,33 @@ async def send_direct_ble(payload: bytes, cfg: dict) -> bool:
         return False
 
 
-async def send_payload(payload: bytes, label: str = "job"):
+async def send_payload(payload: bytes, label: str = "job") -> bool:
     """Send payload directly over BLE using saved printer config."""
     if not payload:
         fail("Empty payload — nothing to send.")
-        return
+        return False
 
     info(f"Sending {label} ({len(payload)} bytes)…")
     cfg = load_config()
     if not cfg:
         fail(f"No printer config at {CONFIG_FILE}")
         info("Run bt_scan.py --save first.")
-        return
+        return False
 
     if await send_direct_ble(payload, cfg):
         ok(f"{label} sent via direct BLE → printer")
+        return True
     else:
         fail(f"Could not deliver {label}.")
         info("Make sure the printer is on and in range.")
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  REGISTER FLOW  (scan + probe + register + optional test page)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def main(argv: list[str] | None = None):
+async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="bt_print.py — Direct Bluetooth Printer Controller",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -1199,17 +1271,22 @@ async def main(argv: list[str] | None = None):
     print(f"  Python   : {sys.version.split()[0]}")
     print(f"  Config   : {CONFIG_FILE}")
 
+    if platform.system() != "Windows":
+        fail("This toolkit supports Windows only.")
+        return 1
+
     if not BLEAK_AVAILABLE:
         fail("'bleak' not installed. Run:  pip install bleak")
-        sys.exit(1)
+        return 1
 
     # ── Detect printer protocol from saved config ────────────────────────────
     cfg = load_config()
     if not cfg:
         fail(f"No printer config at {CONFIG_FILE}")
         info("Run bt_scan.py --save first.")
-        return
+        return 1
     use_cat = cfg and _is_cat_printer(cfg.get("write_uuid", ""))
+    success = True
 
     # ── Direct print (no relay needed) ───────────────────────────────────────
     if args.test_page:
@@ -1224,7 +1301,7 @@ async def main(argv: list[str] | None = None):
             )
         else:
             payload = ESCPOS_TEST
-        await send_payload(payload, "test page")
+        success = await send_payload(payload, "test page")
 
     elif args.print_text:
         section("Print Text")
@@ -1232,13 +1309,13 @@ async def main(argv: list[str] | None = None):
             payload = text_to_cat_protocol(args.print_text)
         else:
             payload = text_to_escpos(args.print_text.encode("utf-8"))
-        await send_payload(payload, "text")
+        success = await send_payload(payload, "text")
 
     elif args.print_image:
         section(f"Print Image: {args.print_image}")
         if not os.path.exists(args.print_image):
             fail(f"File not found: {args.print_image}")
-            return
+            return 1
         if use_cat:
             try:
                 from PIL import Image as _PIL, ImageOps, ImageFilter
@@ -1252,29 +1329,32 @@ async def main(argv: list[str] | None = None):
                 payload = image_to_cat_protocol(img)
             except ImportError:
                 fail("Pillow not installed — run: pip install Pillow")
-                return
+                return 1
         else:
             payload = image_file_to_escpos(args.print_image)
-        await send_payload(payload, "image")
+        success = await send_payload(payload, "image")
 
     elif args.print_pdf:
         section(f"Print PDF: {args.print_pdf}")
         if not os.path.exists(args.print_pdf):
             fail(f"File not found: {args.print_pdf}")
-            return
+            return 1
         with open(args.print_pdf, "rb") as _f:
             pdf_bytes = _f.read()
         payload = _to_cat_payload(pdf_bytes, "PDF") if use_cat else convert_to_escpos(pdf_bytes, "PDF")
         if not payload:
             fail("PDF conversion failed — install PyMuPDF:  pip install pymupdf")
-            return
-        await send_payload(payload, "PDF")
+            return 1
+        success = await send_payload(payload, "PDF")
 
     else:
         parser.print_help()
+        return 0
 
     sep("═")
 
 
+    return 0 if success else 1
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))
