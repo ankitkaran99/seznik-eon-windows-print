@@ -5,6 +5,7 @@ Used by both bt_scan.py and bt_print.py
 
 import os
 import sys
+import time
 import asyncio
 import platform
 import subprocess
@@ -60,7 +61,31 @@ def _legacy_config_file():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "bt_printer_config.json")
 
 
-CONFIG_DIR        = _config_dir()
+def _can_write_dir(path):
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write-test.tmp")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_config_dir():
+    preferred = _config_dir()
+    if _can_write_dir(preferred):
+        return preferred
+
+    legacy_dir = os.path.dirname(_legacy_config_file())
+    if _can_write_dir(legacy_dir):
+        return legacy_dir
+
+    return preferred
+
+
+CONFIG_DIR        = _resolve_config_dir()
 CONFIG_FILE       = os.path.join(CONFIG_DIR, "bt_printer_config.json")
 
 # ESC/POS command constants
@@ -429,8 +454,26 @@ def save_config(device, write_uuid):
         "registered": True,
     }
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=2)
+    temp_file = f"{CONFIG_FILE}.tmp"
+    last_error = None
+    for _ in range(5):
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+            os.replace(temp_file, CONFIG_FILE)
+            last_error = None
+            break
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.25)
+        finally:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except OSError:
+                pass
+    if last_error is not None:
+        raise last_error
     ok(f"Config saved → {CONFIG_FILE}")
 
 def _migrate_legacy_config():

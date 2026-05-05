@@ -280,8 +280,9 @@ function Start-RelayLauncher {
     }
 
     $wscriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
-    $process = Start-Process -FilePath $wscriptPath -ArgumentList "`"$($resolvedLauncher.Path)`"" -WindowStyle Hidden -PassThru -Wait
-    if ($process.ExitCode -ne 0) {
+    $process = Start-Process -FilePath $wscriptPath -ArgumentList "`"$($resolvedLauncher.Path)`"" -WindowStyle Hidden -PassThru
+    Start-Sleep -Milliseconds 500
+    if ($process.HasExited -and $process.ExitCode -ne 0) {
         throw "Relay launcher failed with exit code $($process.ExitCode)."
     }
 

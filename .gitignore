@@ -32,3 +32,5 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+
+bt_printer_config.json
