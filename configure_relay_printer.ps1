@@ -9,7 +9,6 @@ param(
     [string]$DriverName = "",
     [string]$DriverInstallerArgs = "",
     [string]$PythonExecutablePath = "",
-    [string]$PythonRuntimeDirectory = "",
     [string]$RelayScriptPath = "",
     [string]$StartupLauncherPath = "",
     [string]$GuiLauncherPath = "",
@@ -20,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$PythonVersion = "3.13.13"
+$SystemPythonPackageId = "Python.Python.3.12"
 
 function Write-Info([string]$Message) {
     Write-Host "[INFO] $Message"
@@ -68,57 +67,134 @@ function Test-PythonModuleInstalled {
     return ($LASTEXITCODE -eq 0)
 }
 
-function Get-PortablePythonPackageName {
-    if ([Environment]::Is64BitOperatingSystem) {
-        return "python"
-    }
+function Test-PythonExecutable {
+    param([string]$PythonExe)
 
-    return "pythonx86"
+    & $PythonExe -c "import sys; sys.exit(0)" *> $null
+    return ($LASTEXITCODE -eq 0)
 }
 
-function Get-PortablePythonExecutablePath {
-    param([string]$RuntimeDirectory)
+function Get-CommandPathIfPresent {
+    param([string]$CommandName)
 
-    $packageName = Get-PortablePythonPackageName
-    return Join-Path $RuntimeDirectory "$packageName\tools\python.exe"
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    if (-not $command) {
+        return $null
+    }
+
+    return $command.Source
 }
 
-function Install-PortablePython {
-    param([string]$RuntimeDirectory)
+function Resolve-PythonFromLauncher {
+    param([string]$LauncherCommand)
 
-    $pythonExe = Get-PortablePythonExecutablePath -RuntimeDirectory $RuntimeDirectory
-    if (Test-Path -LiteralPath $pythonExe -PathType Leaf) {
-        Write-Ok "Portable Python is already present at '$pythonExe'."
-        return $pythonExe
+    $launcherPath = Get-CommandPathIfPresent -CommandName $LauncherCommand
+    if (-not (Test-HasText -Value $launcherPath)) {
+        return $null
     }
 
-    $runtimeRoot = Resolve-Path -LiteralPath $RuntimeDirectory -ErrorAction SilentlyContinue
-    if (-not $runtimeRoot) {
-        New-Item -ItemType Directory -Path $RuntimeDirectory -Force | Out-Null
-        $runtimeRoot = Resolve-Path -LiteralPath $RuntimeDirectory -ErrorAction Stop
-    }
-
-    $nugetExe = Join-Path $runtimeRoot.Path "nuget.exe"
-    if (-not (Test-Path -LiteralPath $nugetExe -PathType Leaf)) {
-        Write-Info "Downloading NuGet bootstrapper..."
-        Invoke-WebRequest -Uri "https://aka.ms/nugetclidl" -OutFile $nugetExe
-        Write-Ok "Downloaded NuGet bootstrapper to '$nugetExe'."
-    }
-
-    $packageName = Get-PortablePythonPackageName
-    Write-Info "Downloading portable Python package '$packageName' version $PythonVersion..."
-    & $nugetExe install $packageName -Version $PythonVersion -ExcludeVersion -OutputDirectory $runtimeRoot.Path | Out-Null
+    $pythonExe = & $launcherPath -3 -c "import sys; print(sys.executable)" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        throw "NuGet install for '$packageName' failed with exit code $LASTEXITCODE."
+        return $null
     }
 
-    $pythonExe = Get-PortablePythonExecutablePath -RuntimeDirectory $runtimeRoot.Path
-    if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
-        throw "Portable Python was downloaded, but '$pythonExe' was not found."
+    $candidate = ($pythonExe | Select-Object -First 1).Trim()
+    if (-not (Test-HasText -Value $candidate)) {
+        return $null
     }
 
-    Write-Ok "Portable Python installed at '$pythonExe'."
-    return $pythonExe
+    $resolvedCandidate = Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue
+    if (-not $resolvedCandidate) {
+        return $null
+    }
+
+    return $resolvedCandidate.Path
+}
+
+function Get-RegisteredPythonInstallPaths {
+    $roots = @(
+        "HKLM:\SOFTWARE\Python\PythonCore",
+        "HKCU:\SOFTWARE\Python\PythonCore",
+        "HKLM:\SOFTWARE\WOW6432Node\Python\PythonCore"
+    )
+
+    $installPaths = @()
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            continue
+        }
+
+        foreach ($versionKey in Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue) {
+            $installPathKey = Join-Path $versionKey.PSPath "InstallPath"
+            $installPath = (Get-ItemProperty -LiteralPath $installPathKey -ErrorAction SilentlyContinue).'(default)'
+            if (Test-HasText -Value $installPath) {
+                $installPaths += (Join-Path $installPath "python.exe")
+            }
+        }
+    }
+
+    return @($installPaths | Select-Object -Unique)
+}
+
+function Resolve-SystemPythonExecutable {
+    param([string]$PreferredPythonExe)
+
+    $candidates = @()
+    if (Test-HasText -Value $PreferredPythonExe) {
+        $candidates += $PreferredPythonExe
+    }
+
+    $pythonCommandPath = Get-CommandPathIfPresent -CommandName "python"
+    if (Test-HasText -Value $pythonCommandPath) {
+        $candidates += $pythonCommandPath
+    }
+
+    $launcherPython = Resolve-PythonFromLauncher -LauncherCommand "py"
+    if (Test-HasText -Value $launcherPython) {
+        $candidates += $launcherPython
+    }
+
+    $candidates += Get-RegisteredPythonInstallPaths
+
+    foreach ($candidate in $candidates | Where-Object { Test-HasText -Value $_ } | Select-Object -Unique) {
+        $resolvedCandidate = Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue
+        if (-not $resolvedCandidate) {
+            continue
+        }
+
+        if ((Test-PythonExecutable -PythonExe $resolvedCandidate.Path) -and
+            (Test-PythonModuleInstalled -PythonExe $resolvedCandidate.Path -ImportName "tkinter")) {
+            return $resolvedCandidate.Path
+        }
+    }
+
+    return $null
+}
+
+function Install-SystemPython {
+    $wingetPath = Get-CommandPathIfPresent -CommandName "winget"
+    if (-not (Test-HasText -Value $wingetPath)) {
+        throw "Python was not found and winget is not available to install it automatically."
+    }
+
+    Write-Info "Installing system Python with winget package '$SystemPythonPackageId'..."
+    $wingetArgs = @(
+        "install",
+        "--exact",
+        "--id", $SystemPythonPackageId,
+        "--scope", "machine",
+        "--silent",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+        "--override", "InstallAllUsers=1 PrependPath=1 Include_launcher=1"
+    )
+
+    $process = Start-Process -FilePath $wingetPath -ArgumentList $wingetArgs -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "winget install for '$SystemPythonPackageId' failed with exit code $($process.ExitCode)."
+    }
+
+    Write-Ok "System Python install completed."
 }
 
 function Ensure-PythonPackage {
@@ -142,28 +218,28 @@ function Ensure-PythonPackage {
     Write-Ok "Installed Python package '$PackageName'."
 }
 
-function Ensure-PythonRuntime {
-    param(
-        [string]$PreferredPythonExe,
-        [string]$RuntimeDirectory
-    )
+function Ensure-SystemPython {
+    param([string]$PreferredPythonExe)
 
-    $pythonExe = $PreferredPythonExe
-    if (-not $pythonExe) {
-        $pythonExe = Install-PortablePython -RuntimeDirectory $RuntimeDirectory
+    $pythonExe = Resolve-SystemPythonExecutable -PreferredPythonExe $PreferredPythonExe
+    if (-not (Test-HasText -Value $pythonExe)) {
+        Install-SystemPython
+        $pythonExe = Resolve-SystemPythonExecutable -PreferredPythonExe $PreferredPythonExe
     }
 
-    $resolvedPython = Resolve-Path -LiteralPath $pythonExe -ErrorAction SilentlyContinue
-    if (-not $resolvedPython) {
-        throw "Python executable '$pythonExe' was not found."
+    if (-not (Test-HasText -Value $pythonExe)) {
+        throw "Python installation completed, but no system python.exe could be resolved."
     }
 
-    $pythonExe = $resolvedPython.Path
-    Write-Info "Using Python runtime '$pythonExe'."
+    Write-Info "Using system Python '$pythonExe'."
     & $pythonExe -m ensurepip --upgrade *> $null
     Ensure-PythonPackage -PythonExe $pythonExe -ImportName "bleak" -PackageName "bleak"
     Ensure-PythonPackage -PythonExe $pythonExe -ImportName "PIL" -PackageName "Pillow"
     Ensure-PythonPackage -PythonExe $pythonExe -ImportName "fitz" -PackageName "pymupdf"
+    if (-not (Test-PythonModuleInstalled -PythonExe $pythonExe -ImportName "tkinter")) {
+        throw "System Python '$pythonExe' does not include tkinter."
+    }
+
     return $pythonExe
 }
 
@@ -400,14 +476,8 @@ function Ensure-ToolkitEnvironment {
 
     $pythonExe = (Resolve-Path -LiteralPath $PythonExePath -ErrorAction Stop).Path
     $toolkitRoot = (Resolve-Path -LiteralPath $ToolkitDir -ErrorAction Stop).Path
-    $pythonwExe = Join-Path (Split-Path -Parent $pythonExe) "pythonw.exe"
-    if (-not (Test-Path -LiteralPath $pythonwExe -PathType Leaf)) {
-        $pythonwExe = $pythonExe
-    }
-
     Set-UserEnvironmentVariable -Name "SEZNIK_EON_TOOLKIT_DIR" -Value $toolkitRoot
     Set-UserEnvironmentVariable -Name "SEZNIK_EON_PYTHON" -Value $pythonExe
-    Set-UserEnvironmentVariable -Name "SEZNIK_EON_PYTHONW" -Value $pythonwExe
     Write-Ok "Saved user environment for toolkit launchers."
 }
 
@@ -830,10 +900,6 @@ if (-not $DriversDirectory) {
     $DriversDirectory = Join-Path $PSScriptRoot "drivers"
 }
 
-if (-not $PythonRuntimeDirectory) {
-    $PythonRuntimeDirectory = $PSScriptRoot
-}
-
 if (-not $RelayScriptPath) {
     $RelayScriptPath = Join-Path $PSScriptRoot "printer_relay.py"
 }
@@ -880,9 +946,8 @@ if ($Uninstall) {
     exit 0
 }
 
-$PythonExecutablePath = Ensure-PythonRuntime `
-    -PreferredPythonExe $PythonExecutablePath `
-    -RuntimeDirectory $PythonRuntimeDirectory
+$PythonExecutablePath = Ensure-SystemPython `
+    -PreferredPythonExe $PythonExecutablePath
 Ensure-ToolkitEnvironment -PythonExePath $PythonExecutablePath -ToolkitDir $PSScriptRoot
 Invoke-PrinterScanSetup -PythonExe $PythonExecutablePath
 
@@ -898,7 +963,6 @@ elseif (Test-PathIfSet -LiteralPath $DriversDirectory) {
 if (Test-PathIfSet -LiteralPath $PythonExecutablePath) {
     Write-Info "Python exe     : $PythonExecutablePath"
 }
-Write-Info "Python runtime : $PythonRuntimeDirectory"
 if (Test-PathIfSet -LiteralPath $RelayScriptPath) {
     Write-Info "Relay script   : $RelayScriptPath"
 }
@@ -909,7 +973,8 @@ Write-Info "Desktop link   : $DesktopShortcutPath"
 Write-Info "Start Menu link: $StartMenuShortcutPath"
 $canLaunchGui = Test-PythonModuleInstalled -PythonExe $PythonExecutablePath -ImportName "tkinter"
 if (-not $canLaunchGui) {
-    Write-Info "GUI support    : tkinter is not available in the bundled Python runtime; GUI shortcuts will be skipped."
+    Write-Fail "GUI support    : tkinter is not available in the selected system Python."
+    exit 1
 }
 
 $driverResult = Ensure-PrinterDriver `

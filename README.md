@@ -22,7 +22,7 @@ Windows toolkit for printing to supported 57mm BLE thermal printers over Bluetoo
 
 - Windows
 - Administrator access for relay setup
-- Internet access during setup so the toolkit can download its local Python runtime and Python packages
+- Internet access during setup so the toolkit can install system Python and Python packages when they are missing
 - A supported BLE receipt printer powered on and available for pairing
 
 ## Quick Start
@@ -35,8 +35,8 @@ powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1
 
 That script handles the full setup:
 
-1. Downloads a local Python runtime into the toolkit directory if it is missing
-2. Installs required Python packages into that local runtime
+1. Resolves a system Python install, or installs one with `winget` if it is missing
+2. Installs required Python packages into that system Python
 3. Prompts for BLE printer scan and saves printer config
 4. Installs or reuses the printer driver
 5. Creates or rebinds the Windows printer queue
@@ -121,7 +121,7 @@ Setup creates:
 - A Windows printer queue bound to that port
 - A logon startup launcher for `printer_relay.py`
 - Desktop and Start Menu shortcuts to `launch.vbs`
-- Local runtime environment variables used by the launchers
+- User environment variables used by the launchers
 
 ### Common Options
 
@@ -132,11 +132,11 @@ powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1 `
   -DriverName "POS-58 Series"
 ```
 
-If you want to override the local runtime or relay script path:
+If you want to override the Python executable or relay script path:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File configure_relay_printer.ps1 `
-  -PythonExecutablePath "python\tools\python.exe" `
+  -PythonExecutablePath "C:\Users\ankit\AppData\Local\Programs\Python\Python312\python.exe" `
   -RelayScriptPath "printer_relay.py"
 ```
 
@@ -166,7 +166,7 @@ Uninstall removes:
 Uninstall does not remove:
 
 - The bundled toolkit files
-- The downloaded local Python runtime in the toolkit directory
+- The installed system Python
 - The installed Windows printer driver package
 
 ## Manual Relay Start
@@ -187,4 +187,5 @@ python printer_relay.py --port 9200
 
 - The toolkit stores printer config in the user profile so source runs and relay runs share the same saved printer
 - `launch.vbs` and the relay startup launcher depend on environment variables written by the setup script
+- Setup expects the selected system Python to include `tkinter`
 - If you move the toolkit directory after setup, rerun `configure_relay_printer.ps1` so launchers and shortcuts are refreshed
