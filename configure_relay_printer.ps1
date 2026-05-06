@@ -334,16 +334,29 @@ function Ensure-RelayStartup {
     }
 
     $startupFolder = [Environment]::GetFolderPath("Startup")
-    $startupLauncher = Join-Path $startupFolder "SeznikEONRelay.vbs"
+    $startupShortcut = Join-Path $startupFolder "SeznikEONRelay.lnk"
+    $legacyStartupLauncher = Join-Path $startupFolder "SeznikEONRelay.vbs"
     $sourceLauncher = New-HiddenRelayLauncher `
         -LauncherPath $LauncherPath `
         -PythonExePath $resolvedPython.Path `
         -RelayScriptPath $resolvedRelayScript.Path `
         -RelayHost $RelayHost `
         -RelayPort $RelayPort
-    Copy-Item -LiteralPath $sourceLauncher -Destination $startupLauncher -Force
-    Write-Ok "Relay startup launcher installed to '$startupLauncher'."
-    return $startupLauncher
+
+    if (Test-Path -LiteralPath $legacyStartupLauncher -PathType Leaf) {
+        Remove-Item -LiteralPath $legacyStartupLauncher -Force
+        Write-Info "Removed legacy startup launcher '$legacyStartupLauncher'."
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($startupShortcut)
+    $shortcut.TargetPath = $sourceLauncher
+    $shortcut.WorkingDirectory = Split-Path -Parent $sourceLauncher
+    $shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,220"
+    $shortcut.Save()
+
+    Write-Ok "Relay startup shortcut installed to '$startupShortcut'."
+    return $startupShortcut
 }
 
 function Start-RelayLauncher {
@@ -369,10 +382,11 @@ function Remove-RelayStartup {
     param([string]$LauncherPath)
 
     $startupFolder = [Environment]::GetFolderPath("Startup")
-    $startupLauncher = Join-Path $startupFolder "SeznikEONRelay.vbs"
+    $startupShortcut = Join-Path $startupFolder "SeznikEONRelay.lnk"
+    $legacyStartupLauncher = Join-Path $startupFolder "SeznikEONRelay.vbs"
     $removedAny = $false
 
-    foreach ($path in @($LauncherPath, $startupLauncher) | Where-Object { $_ } | Select-Object -Unique) {
+    foreach ($path in @($LauncherPath, $startupShortcut, $legacyStartupLauncher) | Where-Object { $_ } | Select-Object -Unique) {
         if (Test-Path -LiteralPath $path -PathType Leaf) {
             Remove-Item -LiteralPath $path -Force
             Write-Ok "Removed relay launcher '$path'."
@@ -1013,7 +1027,7 @@ $startupEntry = Ensure-RelayStartup `
     -LauncherPath $StartupLauncherPath `
     -RelayHost $RelayHost `
     -RelayPort $RelayPort
-Start-RelayLauncher -LauncherPath $startupEntry
+Start-RelayLauncher -LauncherPath $StartupLauncherPath
 $guiShortcuts = @()
 if ($canLaunchGui) {
     $guiShortcuts = Ensure-GuiShortcuts `
