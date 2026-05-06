@@ -43,6 +43,8 @@ That script handles the full setup:
 6. Registers the relay at logon
 7. Creates Desktop and Start Menu shortcuts for the GUI launcher
 
+After installation, do not delete this toolkit directory. Keep it in a persistent location because the relay launcher, shortcuts, and supporting files continue to run from this directory.
+
 ## GUI Usage
 
 Launch the GUI:
@@ -188,4 +190,5 @@ python printer_relay.py --port 9200
 - The toolkit stores printer config in the user profile so source runs and relay runs share the same saved printer
 - `launch.vbs` and the relay startup launcher depend on environment variables written by the setup script
 - Setup expects the selected system Python to include `tkinter`
+- Do not delete the toolkit directory after setup; keep it somewhere persistent
 - If you move the toolkit directory after setup, rerun `configure_relay_printer.ps1` so launchers and shortcuts are refreshed
